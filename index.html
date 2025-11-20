@@ -1,0 +1,477 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Triangle / Circle Visualiser</title>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #000;
+            color: #ddd;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+        }
+
+        .panel {
+            background: #111;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .row {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .controls {
+            width: 260px;
+        }
+
+        label {
+            display: block;
+            margin: 6px 0 2px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 6px;
+            background: #222;
+            border: 1px solid #444;
+            color: #eee;
+            border-radius: 4px;
+        }
+
+        #canvas {
+            width: 100%;
+            max-width: 1000px;
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 8px;
+            display: block;
+            margin: auto;
+            cursor: default;
+        }
+
+        .eq {
+            line-height: 1.4em;
+        }
+
+        .small {
+            font-size: 0.9em;
+            color: #aaa;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Driven / Axis Triangle Visualiser</h1>
+
+<div class="panel">
+    <div class="row">
+
+        <div class="controls">
+            <label>Mode</label>
+            <select id="mode">
+                <option value="driven">Driven mode (circle intersection)</option>
+                <option value="axis">Axis mode (AC, BC, ∠C)</option>
+            </select>
+
+            <label style="margin-top:12px;">
+                <input type="checkbox" id="showDebug" checked />
+                Show debug visualiser
+            </label>
+
+            <hr style="border-color:#333; margin:12px 0;">
+
+            <h3>Common</h3>
+            <label>Base AC length</label>
+            <input id="lenAC" type="number" value="8" step="0.1"/>
+
+            <div id="drivenControls">
+                <h3 style="margin-top:16px;">Driven mode (circles)</h3>
+                <label>Radius AB (circle at A)</label>
+                <input id="radA" type="number" value="6" step="0.1"/>
+
+                <label>Radius CB (circle at C)</label>
+                <input id="radC" type="number" value="6" step="0.1"/>
+            </div>
+
+            <div id="axisControls" class="hidden">
+                <h3 style="margin-top:16px;">Axis mode</h3>
+                <label>Length BC</label>
+                <input id="lenBC" type="number" value="6" step="0.1"/>
+
+                <label>Angle at C (degrees)</label>
+                <input id="angleC" type="number" value="40" step="0.1"/>
+            </div>
+        </div>
+
+        <div style="flex:1; min-width:300px; display:flex; align-items:stretch;">
+            <canvas id="canvas"></canvas>
+        </div>
+
+    </div>
+</div>
+
+<div class="panel" id="results"></div>
+
+<script>
+    // ---------- helpers ----------
+    function toRad(d) { return d * Math.PI / 180; }
+    function toDeg(r) { return r * 180 / Math.PI; }
+
+    function dist(p, q) {
+        const dx = q.x - p.x, dy = q.y - p.y;
+        return Math.sqrt(dx*dx + dy*dy);
+    }
+
+    // Circle–circle intersection in Y-up world
+    function circleIntersect(A, r1, C, r2) {
+        const d = dist(A, C);
+        if (d === 0 && r1 === r2) return null;          // infinite solutions
+        if (d > r1 + r2) return null;                   // too far apart
+        if (d < Math.abs(r1 - r2)) return null;         // one inside other
+
+        const a = (r1*r1 - r2*r2 + d*d) / (2*d);
+        const h2 = r1*r1 - a*a;
+        if (h2 < 0) return null;
+        const h = Math.sqrt(h2);
+
+        const xm = A.x + a * (C.x - A.x) / d;
+        const ym = A.y + a * (C.y - A.y) / d;
+
+        const rx = -(C.y - A.y) * (h / d);
+        const ry =  (C.x - A.x) * (h / d);
+
+        const p1 = { x: xm + rx, y: ym + ry };
+        const p2 = { x: xm - rx, y: ym - ry };
+
+        return { p1, p2, d, a, h, xm, ym };
+    }
+
+    // ---------- DOM ----------
+    const canvas = document.getElementById("canvas");
+    const ctx     = canvas.getContext("2d");
+    const modeEl  = document.getElementById("mode");
+    const showDebugEl = document.getElementById("showDebug");
+
+    const lenACEl = document.getElementById("lenAC");
+    const radAEl  = document.getElementById("radA");
+    const radCEl  = document.getElementById("radC");
+    const lenBCEl = document.getElementById("lenBC");
+    const angleCEl = document.getElementById("angleC");
+
+    const drivenControls = document.getElementById("drivenControls");
+    const axisControls   = document.getElementById("axisControls");
+    const resultsPanel   = document.getElementById("results");
+
+    // ---------- main update ----------
+    function update() {
+        const mode = modeEl.value;
+        drivenControls.classList.toggle("hidden", mode !== "driven");
+        axisControls.classList.toggle("hidden", mode !== "axis");
+
+        const AC = parseFloat(lenACEl.value);
+        if (!(AC > 0)) {
+            resultsPanel.innerHTML = "<h2>Results</h2>Base AC must be > 0.";
+            clearCanvas();
+            return;
+        }
+
+        const A = { x: 0,   y: 0 };
+        const C = { x: AC,  y: 0 };
+        let B = null;
+        let debugData = {};
+
+        if (mode === "driven") {
+            const rA = parseFloat(radAEl.value);
+            const rC = parseFloat(radCEl.value);
+            if (!(rA > 0 && rC > 0)) {
+                resultsPanel.innerHTML = "<h2>Results</h2>Radii must be > 0.";
+                clearCanvas();
+                return;
+            }
+            const I = circleIntersect(A, rA, C, rC);
+            if (!I) {
+                resultsPanel.innerHTML = "<h2>Results</h2>No intersection for these radii.";
+                clearCanvas();
+                return;
+            }
+            // choose intersection above baseline (largest y)
+            B = (I.p1.y >= I.p2.y) ? I.p1 : I.p2;
+            debugData = { mode, A, B, C, rA, rC, I };
+        } else { // axis mode
+            const BC = parseFloat(lenBCEl.value);
+            const angleC = parseFloat(angleCEl.value);
+            if (!(BC > 0)) {
+                resultsPanel.innerHTML = "<h2>Results</h2>BC must be > 0.";
+                clearCanvas();
+                return;
+            }
+            if (!(angleC > 0 && angleC < 180)) {
+                resultsPanel.innerHTML = "<h2>Results</h2>Angle C must be between 0 and 180°.";
+                clearCanvas();
+                return;
+            }
+
+            const ang = toRad(angleC);
+            // B computed so that angle at C between CA and CB is angleC, B above baseline
+            B = {
+                x: C.x - BC * Math.cos(ang),
+                y:      BC * Math.sin(ang)
+            };
+            debugData = { mode, A, B, C, BC, angleC };
+        }
+
+        // Compute triangle metrics
+        const AB = dist(A, B);
+        const BC = dist(B, C);
+        const ACd = dist(A, C); // same as AC, but computed
+
+        // Angles using cosine rule
+        const angleA = toDeg(Math.acos(
+            (AB*AB + ACd*ACd - BC*BC) / (2*AB*ACd)
+        ));
+        const angleB = toDeg(Math.acos(
+            (AB*AB + BC*BC - ACd*ACd) / (2*AB*BC)
+        ));
+        const angleCtri = 180 - angleA - angleB;
+
+        // Results text
+        let html = `<h2>Results</h2>
+        <p>Mode: <strong>${mode === "driven" ? "Driven (circles)" : "Axis (AC, BC, ∠C)"}</strong></p>
+        <p>AB = ${AB.toFixed(3)}, BC = ${BC.toFixed(3)}, AC = ${ACd.toFixed(3)}</p>
+        <p>∠A = ${angleA.toFixed(2)}°, ∠B = ${angleB.toFixed(2)}°, ∠C = ${angleCtri.toFixed(2)}°</p>
+        `;
+
+        if (mode === "driven") {
+            const { rA, rC, I } = debugData;
+            html += `
+            <h3>Driven mode (circle intersection)</h3>
+            <div class="eq small">
+                <p>Circle 1: centre A, radius r₁ = AB = ${rA.toFixed(3)}</p>
+                <p>Circle 2: centre C, radius r₂ = CB = ${rC.toFixed(3)}</p>
+                <p>Distance between centres: d = ${I.d.toFixed(3)}</p>
+                <p>a = (r₁² − r₂² + d²) / (2d)</p>
+                <p>h = √(r₁² − a²)</p>
+                <p>Intersection P₁, P₂, choose the one with y ≥ 0 as B.</p>
+            </div>`;
+        } else {
+            html += `
+            <h3>Axis mode</h3>
+            <div class="eq small">
+                <p>A = (0, 0), C = (AC, 0)</p>
+                <p>Given BC and ∠C,</p>
+                <p>B.x = C.x − BC·cos(∠C)</p>
+                <p>B.y = BC·sin(∠C)</p>
+            </div>`;
+        }
+
+        if (!showDebugEl.checked) {
+            html += `<p class="small">Debug visualiser is OFF — only triangle ABC is drawn.</p>`;
+        }
+
+        resultsPanel.innerHTML = html;
+
+        drawScene(A, B, C, debugData);
+    }
+
+    function clearCanvas() {
+        const w = canvas.clientWidth || 600;
+        canvas.width = w;
+        canvas.height = w * 0.5;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // ---------- drawing ----------
+    function drawScene(A, B, C, debugData) {
+        const showDebug = showDebugEl.checked;
+        // Collect points for bounding box
+        let pts = [A, B, C];
+
+        if (showDebug && debugData.mode === "driven") {
+            const { rA, rC } = debugData;
+            // full circles extents
+            pts.push(
+                {x:A.x+rA, y:A.y}, {x:A.x-rA, y:A.y},
+                {x:A.x,    y:A.y+rA}, {x:A.x, y:A.y-rA},
+                {x:C.x+rC, y:C.y}, {x:C.x-rC, y:C.y},
+                {x:C.x,    y:C.y+rC}, {x:C.x, y:C.y-rC}
+            );
+        }
+
+        let minX = Math.min(...pts.map(p => p.x));
+        let maxX = Math.max(...pts.map(p => p.x));
+        let minY = Math.min(...pts.map(p => p.y));
+        let maxY = Math.max(...pts.map(p => p.y));
+
+        const zoomPadding = 1.0; // world units
+        minX -= zoomPadding;
+        maxX += zoomPadding;
+        minY = Math.min(minY, 0) - zoomPadding; // keep baseline visible
+        maxY += zoomPadding;
+
+        const boxW = maxX - minX;
+        const boxH = maxY - minY;
+
+        const canvasW = canvas.clientWidth || 600;
+        const scale   = boxW > 0 ? (canvasW / boxW) : 1;
+        const canvasH = boxH * scale || 200;
+
+        canvas.width  = canvasW;
+        canvas.height = canvasH;
+
+        function TX(x) { return (x - minX) * scale; }
+        function TY(y) { return canvasH - (y - minY) * scale; } // Y-up → canvas Y-down
+
+        ctx.clearRect(0, 0, canvasW, canvasH);
+
+        // grid + axes
+        if (showDebug) {
+            drawGrid(ctx, minX, maxX, minY, maxY, TX, TY, canvasW, canvasH);
+        }
+
+        // baseline AC (strong)
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#555";
+        ctx.beginPath();
+        ctx.moveTo(TX(A.x), TY(A.y));
+        ctx.lineTo(TX(C.x), TY(C.y));
+        ctx.stroke();
+
+        // triangle ABC
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#ddd";
+        ctx.beginPath();
+        ctx.moveTo(TX(A.x), TY(A.y));
+        ctx.lineTo(TX(B.x), TY(B.y));
+        ctx.lineTo(TX(C.x), TY(C.y));
+        ctx.stroke();
+
+        // points
+        ctx.fillStyle = "#4aa3ff"; // A
+        drawPoint(TX(A.x), TY(A.y), 6);
+        ctx.fillStyle = "#ffcc33"; // C
+        drawPoint(TX(C.x), TY(C.y), 6);
+        ctx.fillStyle = "#ff5555"; // B
+        drawPoint(TX(B.x), TY(B.y), 7);
+
+        // labels (debug only)
+        if (showDebug) {
+            ctx.fillStyle = "#fff";
+            ctx.font = "14px Arial";
+            ctx.fillText("A", TX(A.x) - 10, TY(A.y) + 16);
+            ctx.fillText("C", TX(C.x) + 6, TY(C.y) + 16);
+            ctx.fillText("B", TX(B.x) - 5, TY(B.y) - 10);
+        }
+
+        // driven-mode circles
+        if (showDebug && debugData.mode === "driven") {
+            const { rA, rC } = debugData;
+            ctx.lineWidth = 1.5;
+
+            ctx.strokeStyle = "#4aa3ff";
+            ctx.beginPath();
+            ctx.arc(TX(A.x), TY(A.y), rA*scale, 0, 2*Math.PI);
+            ctx.stroke();
+
+            ctx.strokeStyle = "#ffcc33";
+            ctx.beginPath();
+            ctx.arc(TX(C.x), TY(C.y), rC*scale, 0, 2*Math.PI);
+            ctx.stroke();
+        }
+
+        // axis-mode angle arc at C
+        if (showDebug && debugData.mode === "axis") {
+            const angleC = toRad(debugData.angleC);
+            const r = (boxW / 10) * scale; // visual radius for arc
+            const start = Math.PI;        // along CA (towards A)
+            const end   = Math.PI - angleC; // towards B
+
+            ctx.strokeStyle = "#0f0";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(TX(C.x), TY(C.y), r,
+                Math.PI - angleC, Math.PI, false);
+            ctx.stroke();
+        }
+    }
+
+    function drawPoint(x, y, r) {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, 2*Math.PI);
+        ctx.fill();
+    }
+
+    function drawGrid(ctx, minX, maxX, minY, maxY, TX, TY, w, h) {
+        const majorStep = 1;
+        const minorStep = 0.2;
+
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(255,255,255,0.05)";
+        // minor vertical
+        for (let x = Math.ceil(minX/minorStep)*minorStep; x <= maxX; x += minorStep) {
+            ctx.beginPath();
+            ctx.moveTo(TX(x), TY(minY));
+            ctx.lineTo(TX(x), TY(maxY));
+            ctx.stroke();
+        }
+        // minor horizontal
+        for (let y = Math.ceil(minY/minorStep)*minorStep; y <= maxY; y += minorStep) {
+            ctx.beginPath();
+            ctx.moveTo(TX(minX), TY(y));
+            ctx.lineTo(TX(maxX), TY(y));
+            ctx.stroke();
+        }
+
+        // major
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(255,255,255,0.12)";
+        for (let x = Math.ceil(minX/majorStep)*majorStep; x <= maxX; x += majorStep) {
+            ctx.beginPath();
+            ctx.moveTo(TX(x), TY(minY));
+            ctx.lineTo(TX(x), TY(maxY));
+            ctx.stroke();
+        }
+        for (let y = Math.ceil(minY/majorStep)*majorStep; y <= maxY; y += majorStep) {
+            ctx.beginPath();
+            ctx.moveTo(TX(minX), TY(y));
+            ctx.lineTo(TX(maxX), TY(y));
+            ctx.stroke();
+        }
+
+        // x-axis (y=0)
+        if (minY <= 0 && maxY >= 0) {
+            ctx.strokeStyle = "rgba(255,255,255,0.3)";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(TX(minX), TY(0));
+            ctx.lineTo(TX(maxX), TY(0));
+            ctx.stroke();
+        }
+    }
+
+    // ---------- wire up ----------
+    [
+        modeEl, showDebugEl,
+        lenACEl, radAEl, radCEl,
+        lenBCEl, angleCEl
+    ].forEach(el => el.addEventListener("input", update));
+
+    window.addEventListener("load", update);
+</script>
+
+</body>
+</html>
