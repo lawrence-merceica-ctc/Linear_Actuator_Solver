@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>Triangle / Circle Visualiser</title>
+    <title>Linear Actuator Solver</title>
 
     <style>
         body {
@@ -60,23 +60,41 @@
             cursor: default;
         }
 
-        .eq {
+        .small {
+            font-size: 0.85em;
+            color: #aaa;
             line-height: 1.4em;
         }
 
-        .small {
-            font-size: 0.9em;
-            color: #aaa;
+        .eq {
+            line-height: 1.4em;
         }
 
         .hidden {
             display: none;
         }
+
+        .math-block {
+            margin-top: 10px;
+        }
+
+        .math-block h3 {
+            margin-bottom: 4px;
+        }
+
+        .inline-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .inline-row > div {
+            flex: 1;
+        }
     </style>
 </head>
 <body>
 
-<h1>Driven / Axis Triangle Visualiser</h1>
+<h1>Linear Actuator Solver</h1>
 
 <div class="panel">
     <div class="row">
@@ -88,9 +106,10 @@
                 <option value="axis">Axis mode (AC, BC, ∠C)</option>
             </select>
 
-            <label style="margin-top:12px;">
+            <!-- Checkbox with label left, checkbox right -->
+            <label style="margin-top:12px; display:flex; flex-direction:row; align-items:center; justify-content:space-between; gap:8px;">
+                <span>Show debug (grid, circles)</span>
                 <input type="checkbox" id="showDebug" checked />
-                Show debug visualiser
             </label>
 
             <hr style="border-color:#333; margin:12px 0;">
@@ -102,10 +121,10 @@
             <div id="drivenControls">
                 <h3 style="margin-top:16px;">Driven mode (circles)</h3>
                 <label>Radius AB (circle at A)</label>
-                <input id="radA" type="number" value="6" step="0.1"/>
+                <input id="radA" type="number" value="7.1" step="0.1"/>8
 
                 <label>Radius CB (circle at C)</label>
-                <input id="radC" type="number" value="6" step="0.1"/>
+                <input id="radC" type="number" value="3.2" step="0.1"/>
             </div>
 
             <div id="axisControls" class="hidden">
@@ -115,6 +134,31 @@
 
                 <label>Angle at C (degrees)</label>
                 <input id="angleC" type="number" value="40" step="0.1"/>
+            </div>
+
+            <div class="panel small" style="margin-top:16px;">
+                <h3>Tutorial</h3>
+                <p>
+                    This visualiser shows how a linear actuator (or sliding joint) can be understood as a
+                    triangle between three key points:
+                </p>
+                <ul>
+                    <li>Points A and C lie on a fixed baseline (the mounting points).</li>
+                    <li>Point B is the moving joint where the actuator connects to the structure.</li>
+                    <li>
+                        In <strong>Driven mode</strong>, B is found as the intersection of two circles:
+                        one around A with radius AB, and one around C with radius CB.
+                    </li>
+                    <li>
+                        In <strong>Axis mode</strong>, you specify BC and the angle at C, and B is
+                        computed from AC, BC, and ∠C.
+                    </li>
+                    <li>Use the debug view to see construction circles and the grid.</li>
+                </ul>
+                <p>
+                    The triangle ABC is then used to compute all side lengths and internal angles,
+                    which can map directly to actuator stroke and joint angles in your rig.
+                </p>
             </div>
         </div>
 
@@ -298,12 +342,12 @@
     // ---------- drawing ----------
     function drawScene(A, B, C, debugData) {
         const showDebug = showDebugEl.checked;
+
         // Collect points for bounding box
         let pts = [A, B, C];
 
         if (showDebug && debugData.mode === "driven") {
             const { rA, rC } = debugData;
-            // full circles extents
             pts.push(
                 {x:A.x+rA, y:A.y}, {x:A.x-rA, y:A.y},
                 {x:A.x,    y:A.y+rA}, {x:A.x, y:A.y-rA},
@@ -317,33 +361,32 @@
         let minY = Math.min(...pts.map(p => p.y));
         let maxY = Math.max(...pts.map(p => p.y));
 
-        const zoomPadding = 1.0; // world units
+        const zoomPadding = 1;
         minX -= zoomPadding;
         maxX += zoomPadding;
-        minY = Math.min(minY, 0) - zoomPadding; // keep baseline visible
+        minY = Math.min(minY, 0) - zoomPadding;
         maxY += zoomPadding;
 
         const boxW = maxX - minX;
         const boxH = maxY - minY;
-
         const canvasW = canvas.clientWidth || 600;
-        const scale   = boxW > 0 ? (canvasW / boxW) : 1;
-        const canvasH = boxH * scale || 200;
+        const scale = canvasW / boxW;
+        const canvasH = boxH * scale;
 
-        canvas.width  = canvasW;
+        canvas.width = canvasW;
         canvas.height = canvasH;
 
         function TX(x) { return (x - minX) * scale; }
-        function TY(y) { return canvasH - (y - minY) * scale; } // Y-up → canvas Y-down
+        function TY(y) { return canvasH - (y - minY) * scale; }
 
         ctx.clearRect(0, 0, canvasW, canvasH);
 
-        // grid + axes
+        // Grid
         if (showDebug) {
             drawGrid(ctx, minX, maxX, minY, maxY, TX, TY, canvasW, canvasH);
         }
 
-        // baseline AC (strong)
+        // Baseline AC
         ctx.lineWidth = 2;
         ctx.strokeStyle = "#555";
         ctx.beginPath();
@@ -351,7 +394,7 @@
         ctx.lineTo(TX(C.x), TY(C.y));
         ctx.stroke();
 
-        // triangle ABC
+        // Triangle ABC
         ctx.lineWidth = 3;
         ctx.strokeStyle = "#ddd";
         ctx.beginPath();
@@ -360,52 +403,79 @@
         ctx.lineTo(TX(C.x), TY(C.y));
         ctx.stroke();
 
-        // points
-        ctx.fillStyle = "#4aa3ff"; // A
-        drawPoint(TX(A.x), TY(A.y), 6);
-        ctx.fillStyle = "#ffcc33"; // C
-        drawPoint(TX(C.x), TY(C.y), 6);
-        ctx.fillStyle = "#ff5555"; // B
-        drawPoint(TX(B.x), TY(B.y), 7);
+        // Points
+        function dot(p, col, r=6){
+            ctx.fillStyle = col;
+            ctx.beginPath();
+            ctx.arc(TX(p.x), TY(p.y), r, 0, Math.PI*2);
+            ctx.fill();
+        }
 
-        // labels (debug only)
+        dot(A, "#4aa3ff");
+        dot(B, "#ff5555", 7);
+        dot(C, "#ffcc33");
+
+        // ABC labels (kept exactly as before)
         if (showDebug) {
             ctx.fillStyle = "#fff";
             ctx.font = "14px Arial";
-            ctx.fillText("A", TX(A.x) - 10, TY(A.y) + 16);
-            ctx.fillText("C", TX(C.x) + 6, TY(C.y) + 16);
-            ctx.fillText("B", TX(B.x) - 5, TY(B.y) - 10);
+            ctx.fillText("A", TX(A.x)-10, TY(A.y)+16);
+            ctx.fillText("C", TX(C.x)+6, TY(C.y)+16);
+            ctx.fillText("B", TX(B.x)-5, TY(B.y)-10);
         }
 
-        // driven-mode circles
+        // Circles for driven mode
         if (showDebug && debugData.mode === "driven") {
             const { rA, rC } = debugData;
-            ctx.lineWidth = 1.5;
 
             ctx.strokeStyle = "#4aa3ff";
+            ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.arc(TX(A.x), TY(A.y), rA*scale, 0, 2*Math.PI);
+            ctx.arc(TX(A.x), TY(A.y), rA*scale, 0, Math.PI*2);
             ctx.stroke();
 
             ctx.strokeStyle = "#ffcc33";
             ctx.beginPath();
-            ctx.arc(TX(C.x), TY(C.y), rC*scale, 0, 2*Math.PI);
+            ctx.arc(TX(C.x), TY(C.y), rC*scale, 0, Math.PI*2);
             ctx.stroke();
         }
 
-        // axis-mode angle arc at C
-        if (showDebug && debugData.mode === "axis") {
-            const angleC = toRad(debugData.angleC);
-            const r = (boxW / 10) * scale; // visual radius for arc
-            const start = Math.PI;        // along CA (towards A)
-            const end   = Math.PI - angleC; // towards B
+        // --- Debug text (Angle C, AB, BC) ---
+        if (showDebug) {
+            const AB = dist(A, B);
+            const BC = dist(B, C);
 
-            ctx.strokeStyle = "#0f0";
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(TX(C.x), TY(C.y), r,
-                Math.PI - angleC, Math.PI, false);
-            ctx.stroke();
+            // Midpoints of each line
+            const midAB = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+            const midBC = { x: (B.x + C.x) / 2, y: (B.y + C.y) / 2 };
+
+            // Angle C (same as results)
+            const AC = dist(A, C);
+            const angleC = Math.acos((AC*AC + BC*BC - AB*AB) / (2*AC*BC)) * (180/Math.PI);
+
+            ctx.fillStyle = "#fff";
+            ctx.font = "14px Arial";
+
+            // AB length at midpoint
+            ctx.fillText(
+                `AB: ${AB.toFixed(3)}`,
+                TX(midAB.x) + 5,
+                TY(midAB.y) - 5
+            );
+
+            // BC length at midpoint
+            ctx.fillText(
+                `BC: ${BC.toFixed(3)}`,
+                TX(midBC.x) + 5,
+                TY(midBC.y) - 5
+            );
+
+            // --- Angle displayed to the RIGHT of point C ---
+            ctx.fillText(
+                `${angleC.toFixed(2)}°`,
+                TX(C.x) + 18,
+                TY(C.y) - 6
+            );
         }
     }
 
